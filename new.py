@@ -31,7 +31,7 @@ from telegram.ext import (
 # Replace with your bot token (or keep as env var)
 REQUIRED_CHANNEL = -1002710971355
 
-BOT_TOKEN = os.getenv("GIVEAWAY_BOT_TOKEN", "8225591291:AAHhuIJkWDpz91CoJ6WD_bmIIWmcFhDhVVU")
+BOT_TOKEN = os.getenv("GIVEAWAY_BOT_TOKEN", "7875476980:AAGLYnxaDGgjQLELbDRsdgR6aC1wCIDwOCk")
 
 # Admin IDs - update as needed
 ADMIN_IDS: List[int] = [
