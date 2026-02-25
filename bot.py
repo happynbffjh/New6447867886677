@@ -1127,18 +1127,23 @@ def extract_archive_files(archive_bytes):
 
 
 def _extract_zip_inmemory(archive_bytes, skip_ext):
+    extract_dir = os.path.join(DOWNLOAD_DIR, f"zip_{int(time.time())}_{random.randint(1000,9999)}")
+    os.makedirs(extract_dir, exist_ok=True)
     try:
         start = time.time()
         cookies = {}
         txt_files = []
 
-        zf = zipfile.ZipFile(io.BytesIO(archive_bytes))
-        names = zf.namelist()
+        zip_path = os.path.join(extract_dir, "source.zip")
+        with open(zip_path, 'wb') as f:
+            f.write(archive_bytes)
+
+        zf = zipfile.ZipFile(zip_path)
         txt_names = []
         nested_zips = []
         non_txt_names = []
 
-        for name in names:
+        for name in zf.namelist():
             if name.endswith('/'):
                 continue
             basename = os.path.basename(name).lower()
@@ -1157,27 +1162,37 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
         t_classify = time.time() - start
         logger.info(f"ZIP classify: {len(txt_names)} txt, {len(nested_zips)} nested zips, {len(non_txt_names)} other in {t_classify:.2f}s")
 
+        extract_members = txt_names + nested_zips
+        if not txt_names and non_txt_names:
+            extract_members += non_txt_names[:500]
+
+        t_extract = time.time()
+        out_dir = os.path.join(extract_dir, "out")
+        if extract_members:
+            zf.extractall(out_dir, members=extract_members)
+        zf.close()
+        t_extract_done = time.time() - t_extract
+        logger.info(f"ZIP extractall: {len(extract_members)} files to disk in {t_extract_done:.2f}s")
+
+        os.remove(zip_path)
+
         t_parse = time.time()
-        batch_size = 100
-        for batch_start in range(0, len(txt_names), batch_size):
-            batch = txt_names[batch_start:batch_start + batch_size]
-            for name in batch:
-                try:
-                    raw = zf.read(name)
-                    content = raw.decode('utf-8', errors='ignore')
-                    cookie_str = parse_cookie_file_content(content)
-                    if cookie_str:
-                        cookies[name] = cookie_str
-                        txt_files.append(name)
-                except:
-                    pass
-            if batch_start > 0 and batch_start % 500 == 0:
-                logger.info(f"ZIP parse progress: {batch_start}/{len(txt_names)} files...")
+        for name in txt_names:
+            try:
+                fpath = os.path.join(out_dir, name)
+                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                cookie_str = parse_cookie_file_content(content)
+                if cookie_str:
+                    cookies[name] = cookie_str
+                    txt_files.append(name)
+            except:
+                pass
 
         for nz in nested_zips:
             try:
-                nz_bytes = zf.read(nz)
-                with zipfile.ZipFile(io.BytesIO(nz_bytes)) as nzf:
+                nz_path = os.path.join(out_dir, nz)
+                with zipfile.ZipFile(nz_path) as nzf:
                     for nname in nzf.namelist():
                         if nname.endswith('/'):
                             continue
@@ -1199,7 +1214,9 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
         if not txt_files and non_txt_names:
             for name in non_txt_names[:500]:
                 try:
-                    content = zf.read(name).decode('utf-8', errors='ignore')
+                    fpath = os.path.join(out_dir, name)
+                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
                     cookie_str = parse_cookie_file_content(content)
                     if cookie_str:
                         cookies[name] = cookie_str
@@ -1207,9 +1224,8 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
                 except:
                     pass
 
-        zf.close()
         elapsed = time.time() - start
-        logger.info(f"ZIP inmemory extract+parse: {len(txt_files)} cookies from {len(txt_names)} txt files in {elapsed:.2f}s (classify={t_classify:.2f}s, parse={time.time()-t_parse:.2f}s)")
+        logger.info(f"ZIP disk extract+parse: {len(txt_files)} cookies from {len(txt_names)} txt files in {elapsed:.2f}s (classify={t_classify:.2f}s, extract={t_extract_done:.2f}s, parse={time.time()-t_parse:.2f}s)")
 
         if not txt_files:
             return None, [], None
@@ -1223,6 +1239,9 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
         import traceback
         logger.error(traceback.format_exc())
         return None, [], None
+    finally:
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        logger.info(f"ZIP cleanup: deleted {extract_dir}")
 
 
 def _extract_to_disk(archive_bytes, rarfile, py7zr, tarfile, skip_ext):
