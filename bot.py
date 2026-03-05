@@ -23,7 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8252702666:AAEKVanQAvxLZJMl1kAcDb-3_luVeach8_0")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7972038760:AAEXOmE44KVDTY5xLVVUi9MMuWF2CbIKYYo")
 OWNER_USER_ID = "6284479489"
 
 CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "-1002710971355"))
@@ -31,7 +31,7 @@ PRIVATE_CHANNEL_LINK = os.environ.get("PRIVATE_CHANNEL_LINK", "https://t.me/+ttt
 
 DOWNLOAD_DIR = "downloads"
 RESULTS_DIR = "results"
-TIMEOUT_REQUEST = 10
+TIMEOUT_REQUEST = 7
 WORKER_COUNT = 10
 MAX_WORKERS = 50
 PROXY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'proxy.json')
@@ -550,17 +550,15 @@ class NetflixChecker:
             pass
         return s
 
-    def check_account(self, cookies):
+    def check_account(self, cookies, timeout=None):
         info = {"status": "failure", "message": "Unknown error"}
+        req_timeout = timeout or TIMEOUT_REQUEST
         try:
-            session = requests.Session()
             if isinstance(cookies, dict):
                 cookie_dict = cookies
             else:
                 cookie_dict = self.load_cookies(cookies) or {}
             cookie_dict['L'] = 'en'
-            session.cookies.update(cookie_dict)
-            apply_proxy_to_session(session)
 
             ua = generate_random_ios_ua()
             headers = {
@@ -576,7 +574,7 @@ class NetflixChecker:
                 "Sec-Fetch-User": "?1",
                 "Cache-Control": "max-age=0",
             }
-            resp = session.get("https://www.netflix.com/YourAccount", headers=headers, timeout=TIMEOUT_REQUEST, allow_redirects=True)
+            resp = requests.get("https://www.netflix.com/YourAccount", headers=headers, cookies=cookie_dict, timeout=req_timeout, allow_redirects=True, proxies=self.session.proxies if self.session.proxies else None)
 
             if resp.status_code != 200:
                 info["message"] = f"HTTP {resp.status_code}"
@@ -911,7 +909,7 @@ class NetflixTokenGenerator:
             "Cookie": f"NetflixId={netflix_id_value}",
         }
         try:
-            response = self.session.get(api_url, params=params, headers=headers, timeout=10)
+            response = self.session.get(api_url, params=params, headers=headers, timeout=8)
             if response.status_code != 200:
                 return None, f"iOS API HTTP {response.status_code}"
             data = response.json()
