@@ -23,7 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7972038760:AAEXOmE44KVDTY5xLVVUi9MMuWF2CbIKYYo")
 OWNER_USER_ID = "6284479489"
 
 CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "-1002710971355"))
@@ -1291,18 +1291,12 @@ def extract_archive_files(archive_bytes):
 
 
 def _extract_zip_inmemory(archive_bytes, skip_ext):
-    extract_dir = os.path.join(DOWNLOAD_DIR, f"zip_{int(time.time())}_{random.randint(1000,9999)}")
-    os.makedirs(extract_dir, exist_ok=True)
     try:
         start = time.time()
         cookies = {}
         txt_files = []
 
-        zip_path = os.path.join(extract_dir, "source.zip")
-        with open(zip_path, 'wb') as f:
-            f.write(archive_bytes)
-
-        zf = zipfile.ZipFile(zip_path)
+        zf = zipfile.ZipFile(io.BytesIO(archive_bytes))
         txt_names = []
         nested_zips = []
         non_txt_names = []
@@ -1326,26 +1320,10 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
         t_classify = time.time() - start
         logger.info(f"ZIP classify: {len(txt_names)} txt, {len(nested_zips)} nested zips, {len(non_txt_names)} other in {t_classify:.2f}s")
 
-        extract_members = txt_names + nested_zips
-        if not txt_names and non_txt_names:
-            extract_members += non_txt_names[:500]
-
-        t_extract = time.time()
-        out_dir = os.path.join(extract_dir, "out")
-        if extract_members:
-            zf.extractall(out_dir, members=extract_members)
-        zf.close()
-        t_extract_done = time.time() - t_extract
-        logger.info(f"ZIP extractall: {len(extract_members)} files to disk in {t_extract_done:.2f}s")
-
-        os.remove(zip_path)
-
         t_parse = time.time()
         for name in txt_names:
             try:
-                fpath = os.path.join(out_dir, name)
-                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+                content = zf.read(name).decode('utf-8', errors='ignore')
                 cookie_str = parse_cookie_file_content(content)
                 if cookie_str:
                     cookies[name] = cookie_str
@@ -1355,8 +1333,8 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
 
         for nz in nested_zips:
             try:
-                nz_path = os.path.join(out_dir, nz)
-                with zipfile.ZipFile(nz_path) as nzf:
+                nz_data = zf.read(nz)
+                with zipfile.ZipFile(io.BytesIO(nz_data)) as nzf:
                     for nname in nzf.namelist():
                         if nname.endswith('/'):
                             continue
@@ -1378,9 +1356,7 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
         if not txt_files and non_txt_names:
             for name in non_txt_names[:500]:
                 try:
-                    fpath = os.path.join(out_dir, name)
-                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
+                    content = zf.read(name).decode('utf-8', errors='ignore')
                     cookie_str = parse_cookie_file_content(content)
                     if cookie_str:
                         cookies[name] = cookie_str
@@ -1388,8 +1364,10 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
                 except:
                     pass
 
+        zf.close()
+
         elapsed = time.time() - start
-        logger.info(f"ZIP disk extract+parse: {len(txt_files)} cookies from {len(txt_names)} txt files in {elapsed:.2f}s (classify={t_classify:.2f}s, extract={t_extract_done:.2f}s, parse={time.time()-t_parse:.2f}s)")
+        logger.info(f"ZIP in-memory parse: {len(txt_files)} cookies from {len(txt_names)} txt files in {elapsed:.2f}s (classify={t_classify:.2f}s, parse={time.time()-t_parse:.2f}s)")
 
         if not txt_files:
             return None, [], None
@@ -1403,9 +1381,6 @@ def _extract_zip_inmemory(archive_bytes, skip_ext):
         import traceback
         logger.error(traceback.format_exc())
         return None, [], None
-    finally:
-        shutil.rmtree(extract_dir, ignore_errors=True)
-        logger.info(f"ZIP cleanup: deleted {extract_dir}")
 
 
 def _extract_to_disk(archive_bytes, rarfile, py7zr, tarfile, skip_ext):
@@ -1486,7 +1461,28 @@ def _extract_to_disk(archive_bytes, rarfile, py7zr, tarfile, skip_ext):
             shutil.rmtree(extract_dir, ignore_errors=True)
             return None, [], None
 
-        return ExtractedArchive(extract_dir), txt_files, "folder"
+        cookies = {}
+        for name in txt_files:
+            try:
+                fpath = os.path.normpath(os.path.join(extract_dir, name))
+                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                cookie_str = parse_cookie_file_content(content)
+                if cookie_str:
+                    cookies[name] = cookie_str
+            except:
+                pass
+
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        logger.info(f"RAR/7Z cleanup: deleted {extract_dir}")
+
+        valid_files = [n for n in txt_files if n in cookies]
+        if not valid_files:
+            return None, [], None
+
+        archive = InMemoryArchive({})
+        archive.cookies = cookies
+        return archive, valid_files, "inmemory"
 
     except Exception as e:
         logger.error(f"Archive extraction failed: {e}")
@@ -2640,13 +2636,17 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if args_text:
             cookie_text = args_text
         elif message.from_user.id in user_file_store:
-            fpath = user_file_store[message.from_user.id]
-            try:
-                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                    cookie_text = f.read()
-                source_label = os.path.basename(fpath)
-            except:
-                pass
+            stored = user_file_store[message.from_user.id]
+            if isinstance(stored, str):
+                cookie_text = stored
+                source_label = "stored_file"
+            else:
+                try:
+                    with open(stored, 'r', encoding='utf-8', errors='ignore') as f:
+                        cookie_text = f.read()
+                    source_label = os.path.basename(stored)
+                except:
+                    pass
 
     if not cookie_text:
         await message.reply_text(
@@ -2777,12 +2777,15 @@ async def extract_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             raw_text = replied.text or replied.caption
     elif message.from_user.id in user_file_store:
-        fpath = user_file_store[message.from_user.id]
-        try:
-            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                raw_text = f.read()
-        except:
-            pass
+        stored = user_file_store[message.from_user.id]
+        if isinstance(stored, str):
+            raw_text = stored
+        else:
+            try:
+                with open(stored, 'r', encoding='utf-8', errors='ignore') as f:
+                    raw_text = f.read()
+            except:
+                pass
 
     if not raw_text:
         await message.reply_text("Usage:\n/extract <paste cookie dump>\nOR reply to a .txt file with /extract", parse_mode=ParseMode.HTML)
@@ -3051,8 +3054,9 @@ async def process_batch_check_async(bot, message, cookies, source_name, file_siz
             except:
                 pass
         if user_id in user_file_store:
-            path = user_file_store[user_id]
-            cleanup_file(path)
+            stored = user_file_store[user_id]
+            if not isinstance(stored, str):
+                cleanup_file(stored)
             try:
                 del user_file_store[user_id]
             except:
@@ -3093,10 +3097,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_proxy_file:
             try:
                 tg_file = await context.bot.get_file(doc.file_id)
-                local_path = await download_file_to_disk(tg_file, fname)
-                with open(local_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                cleanup_file(local_path)
+                file_bytes = await tg_file.download_as_bytearray()
+                content = bytes(file_bytes).decode('utf-8', errors='ignore')
                 lines = [l.strip() for l in content.splitlines() if l.strip()]
                 if lines:
                     await _validate_and_add_proxies(context.bot, message, lines)
@@ -3109,10 +3111,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if fname_lower.endswith('.zip') or fname_lower.endswith('.rar') or fname_lower.endswith('.7z'):
         try:
             tg_file = await context.bot.get_file(doc.file_id)
-            local_path = await download_file_to_disk(tg_file, fname)
-            with open(local_path, 'rb') as f:
-                file_bytes = f.read()
-            cleanup_file(local_path)
+            file_bytes = bytes(await tg_file.download_as_bytearray())
         except Exception as e:
             await message.reply_text(f"\u274c Failed to download archive: {e}", parse_mode=ParseMode.HTML)
             return
@@ -3129,13 +3128,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         tg_file = await context.bot.get_file(doc.file_id)
-        local_path = await download_file_to_disk(tg_file, fname)
-        with open(local_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
+        file_bytes = await tg_file.download_as_bytearray()
+        content = bytes(file_bytes).decode('utf-8', errors='ignore')
         cookies = parse_cookie_file_content(content)
         if cookies:
-            user_file_store[message.from_user.id] = local_path
-            logger.info(f'File saved to {local_path} for processing')
+            user_file_store[message.from_user.id] = content
+            logger.info(f'File loaded in memory for processing ({len(content)} bytes)')
             await message.reply_text(
                 f"\u2705 File received: {fname}\n\nReply to this message with:\n"
                 f"\u2022 /chk - Check cookies + generate tokens\n"
@@ -3144,7 +3142,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML
             )
         else:
-            cleanup_file(local_path)
             await message.reply_text("\u274c No valid Netflix cookies found in the file.", parse_mode=ParseMode.HTML)
     except Exception as e:
         await message.reply_text(f"\u274c Error: {e}", parse_mode=ParseMode.HTML)
