@@ -23,7 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8252702666:AAEKVanQAvxLZJMl1kAcDb-3_luVeach8_0")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7972038760:AAEXOmE44KVDTY5xLVVUi9MMuWF2CbIKYYo")
 OWNER_USER_ID = "6284479489"
 
 CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "-1002710971355"))
